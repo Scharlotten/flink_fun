@@ -1,0 +1,71 @@
+version: '2'
+
+services:
+
+  minio:
+    image: minio/minio:RELEASE.2022-10-29T06-21-33Z
+    hostname: minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ACCESS_KEY: minio
+      MINIO_SECRET_KEY: minio123
+    entrypoint: sh
+    command: -c 'mkdir -p /data/my-bucket && minio server /data --console-address ":9001"'
+
+
+  # Flink job manager - the job manager handles scheduling and assigns
+  # work to task managers
+  flink:
+    build:
+      context: .
+    hostname: flink
+    container_name: flink
+    depends_on:
+      - minio
+    ports:
+      # This is the port at which the web UI is accessible over HTTP
+      - "8081:8081"
+      # Job manager port - task managers connect to the job manager via this port
+      - "6123:6123"
+      # Java debugger port
+      - "15005:5005"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink
+      KAFKA_BOOTSTRAP_SERVER: broker:9092
+      FLINK_PROPERTIES: |
+        s3.access-key: minio
+        s3.secret-key: minio123
+        s3.endpoint: http://minio:9000
+        s3.path-style-access: true
+        s3.disable-ssl: true
+    #    env.java.opts: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005"
+
+    volumes:
+      # Make bootstrap.sql available within the container's home directory
+      - ${PWD}/bootstrap.sql:/opt/flink/bootstrap.sql
+    command: jobmanager
+
+  # Flink task manager - receives and executes tasks from job manager
+  taskmanager:
+    build:
+      context: .
+    # Note that this service does not have a container_name, as this property
+    # is set dynamically based on the number of task managers that are run.
+    depends_on:
+      - flink
+    ports:
+      # Java debugger port
+      - "25005-25006:5005"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink
+      FLINK_PROPERTIES: |
+        s3.access-key: minio
+        s3.secret-key: minio123
+        s3.endpoint: http://minio:9000
+        s3.path-style-access: true
+        s3.disable-ssl: true
+    #    env.java.opts: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005"
+    command: taskmanager
